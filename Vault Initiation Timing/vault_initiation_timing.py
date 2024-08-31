@@ -5,6 +5,7 @@ import matplotlib.dates as mdates
 from main import fetch_historical_data, calculate_collateral_ratio, MINIMAL_CR, SAFETY_CR, TOP_UP_CR
 from matplotlib.lines import Line2D
 
+
 def backtest_strategy(vault_collateral, asset, start_date, end_date, initial_cr=1.5,
                       initial_vault_collateral=100000, initial_pool_collateral=100000):
     """Backtest the strategy for given collaterals and asset using actual FLR price."""
@@ -149,7 +150,14 @@ def extended_plot(results_over_time, assets, vault_collaterals, end_date):
                     if date <= end_date - timedelta(days=90):
                         eth_additional = eth_result['total_additional_vault_collateral']
                         usdc_additional = usdc_result['total_additional_vault_collateral']
-                        color = 'green' if eth_additional < usdc_additional else 'blue'
+
+                        # Update color selection logic
+                        if eth_additional == 0 and usdc_additional == 0:
+                            color = 'green' if eth_result['vault_cr_series'][-1] > usdc_result['vault_cr_series'][
+                                -1] else 'blue'
+                        else:
+                            color = 'green' if eth_additional < usdc_additional else 'blue'
+
                         additional_collateral = min(eth_additional, usdc_additional)
                     else:
                         color = 'black'
@@ -165,19 +173,20 @@ def extended_plot(results_over_time, assets, vault_collaterals, end_date):
         ax1.set_title(f"{clean_asset_name} Price and Better Vault Initialization Strategy")
         ax1.set_xlabel("Date")
         ax1.set_ylabel("Price")
-        ax2.set_ylabel("Additional Collateral Required")
+        ax2.set_ylabel("Additional Collateral Required (Best Strategy)")
         ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-        ax1.xaxis.set_major_locator(mdates.MonthLocator())
+        ax1.xaxis.set_major_locator(mdates.MonthLocator())  # Show every month
         ax1.grid(True)
+
+        # Rotate and align the tick labels so they look better
+        fig.autofmt_xdate()
 
         # Create a custom legend
         custom_lines = [Line2D([0], [0], color='green', lw=2),
                         Line2D([0], [0], color='blue', lw=2),
-                        Line2D([0], [0], color='black', lw=2),
                         Line2D([0], [0], color='red', linestyle='--', alpha=0.5)]
-        ax1.legend(custom_lines, ['ETH better', 'USDC better', 'Last 3 months / Full price', 'Additional Collateral'])
+        ax1.legend(custom_lines, ['ETH better', 'USDC better', 'Additional Collateral (Best Strategy)'])
 
-        plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
         plt.savefig(f'price_strategy_{clean_asset_name}.png')
         plt.close()
@@ -198,16 +207,25 @@ def output_summary(results_over_time, assets, vault_collaterals, output_file='su
                 usdc_result = results[usdc_key]
 
                 if eth_result is not None and usdc_result is not None:
-                    better_strategy = 'ETH' if eth_result['total_additional_vault_collateral'] < usdc_result[
-                        'total_additional_vault_collateral'] else 'USDC'
+                    eth_additional = eth_result['total_additional_vault_collateral']
+                    usdc_additional = usdc_result['total_additional_vault_collateral']
+                    eth_final_cr = eth_result['vault_cr_series'][-1]
+                    usdc_final_cr = usdc_result['vault_cr_series'][-1]
+
+                    # Determine better strategy
+                    if eth_additional == 0 and usdc_additional == 0:
+                        better_strategy = 'ETH' if eth_final_cr > usdc_final_cr else 'USDC'
+                    else:
+                        better_strategy = 'ETH' if eth_additional < usdc_additional else 'USDC'
+
                     summary_data.append({
                         'Date': date,
                         'Asset': clean_asset_name,
                         'Better Strategy': better_strategy,
-                        'ETH Final Price': eth_result['vault_cr_series'][-1],
-                        'USDC Final Price': usdc_result['vault_cr_series'][-1],
-                        'ETH Additional Collateral': eth_result['total_additional_vault_collateral'],
-                        'USDC Additional Collateral': usdc_result['total_additional_vault_collateral']
+                        'ETH Final CR': eth_final_cr,
+                        'USDC Final CR': usdc_final_cr,
+                        'ETH Additional Collateral': eth_additional,
+                        'USDC Additional Collateral': usdc_additional
                     })
 
     df = pd.DataFrame(summary_data)
