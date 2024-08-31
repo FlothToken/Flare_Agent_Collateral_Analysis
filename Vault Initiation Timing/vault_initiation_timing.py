@@ -6,6 +6,7 @@ from main import fetch_historical_data, calculate_collateral_ratio, MINIMAL_CR, 
 from matplotlib.lines import Line2D
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import json
 
 
 def backtest_strategy(vault_collateral, asset, start_date, end_date, initial_cr=1.5,
@@ -43,7 +44,8 @@ def backtest_strategy(vault_collateral, asset, start_date, end_date, initial_cr=
     current_fassets = initial_asset_value
 
     # Simulate strategy over time
-    for date, vault_price, asset_price, pool_price in zip(common_dates, vault_collateral_data, asset_data, pool_collateral_data):
+    for date, vault_price, asset_price, pool_price in zip(common_dates, vault_collateral_data, asset_data,
+                                                          pool_collateral_data):
         vault_collateral_value = current_vault_units * vault_price
         pool_collateral_value = current_pool_units * pool_price
         asset_value = current_fassets * asset_price / asset_data.iloc[0]
@@ -91,7 +93,8 @@ def backtest_strategy(vault_collateral, asset, start_date, end_date, initial_cr=
 
         if additional_vault_collateral_needed > 0 or additional_pool_collateral_needed > 0:
             liquidation_events.append(
-                (date, additional_vault_collateral_needed, additional_pool_collateral_needed, lowest_vault_cr, lowest_pool_cr))
+                (date, additional_vault_collateral_needed, additional_pool_collateral_needed, lowest_vault_cr,
+                 lowest_pool_cr))
 
         # Update total additional collateral
         total_additional_vault_collateral += additional_vault_collateral_needed
@@ -184,7 +187,8 @@ def extended_plot(results_over_time, assets, vault_collaterals, end_date):
 
                         # Update color selection logic
                         if eth_additional == 0 and usdc_additional == 0:
-                            color = 'green' if eth_result['vault_cr_series'][-1] > usdc_result['vault_cr_series'][-1] else 'blue'
+                            color = 'green' if eth_result['vault_cr_series'][-1] > usdc_result['vault_cr_series'][
+                                -1] else 'blue'
                         else:
                             color = 'green' if eth_additional < usdc_additional else 'blue'
 
@@ -236,7 +240,8 @@ def interactive_plot(results_over_time, assets, vault_collaterals, end_date):
 
         # Add full asset price data
         fig.add_trace(
-            go.Scatter(x=full_asset_data.index, y=full_asset_data.values, name=f"{clean_asset_name} Price", line=dict(color='black', width=1)),
+            go.Scatter(x=full_asset_data.index, y=full_asset_data.values, name=f"{clean_asset_name} Price",
+                       line=dict(color='black', width=1)),
             secondary_y=False,
         )
 
@@ -260,17 +265,20 @@ def interactive_plot(results_over_time, assets, vault_collaterals, end_date):
                         usdc_additional = usdc_result['total_additional_vault_collateral']
 
                         if eth_additional == 0 and usdc_additional == 0:
-                            color = 'green' if eth_result['vault_cr_series'][-1] > usdc_result['vault_cr_series'][-1] else 'blue'
+                            color = 'green' if eth_result['vault_cr_series'][-1] > usdc_result['vault_cr_series'][
+                                -1] else 'blue'
                         else:
                             color = 'green' if eth_additional < usdc_additional else 'blue'
 
                         best_strategy = 'ETH' if color == 'green' else 'USDC'
-                        best_cr = eth_result['vault_cr_series'][-1] if best_strategy == 'ETH' else usdc_result['vault_cr_series'][-1]
+                        best_cr = eth_result['vault_cr_series'][-1] if best_strategy == 'ETH' else \
+                        usdc_result['vault_cr_series'][-1]
                         best_additional_collateral = min(eth_additional, usdc_additional)
 
                         # Add segment to plot (part of default view)
                         fig.add_trace(
-                            go.Scatter(x=segment_data.index, y=segment_data.values, name=f"Segment {date}", line=dict(color=color, width=2), showlegend=False),
+                            go.Scatter(x=segment_data.index, y=segment_data.values, name=f"Segment {date}",
+                                       line=dict(color=color, width=2), showlegend=False),
                             secondary_y=False,
                         )
 
@@ -280,7 +288,8 @@ def interactive_plot(results_over_time, assets, vault_collaterals, end_date):
         # Add CR traces (all in one group)
         cr_dates, cr_values = zip(*best_cr_data)
         fig.add_trace(
-            go.Scatter(x=cr_dates, y=cr_values, name="Best Strategy CR", line=dict(color='purple', width=1), visible='legendonly', legendgroup='CR'),
+            go.Scatter(x=cr_dates, y=cr_values, name="Best Strategy CR", line=dict(color='purple', width=1),
+                       visible='legendonly', legendgroup='CR'),
             secondary_y=True,
         )
 
@@ -293,14 +302,16 @@ def interactive_plot(results_over_time, assets, vault_collaterals, end_date):
         ]
         for cr, name, color in cr_thresholds:
             fig.add_trace(
-                go.Scatter(x=[start_date, end_date], y=[cr, cr], name=name, line=dict(color=color, width=1, dash='dash'), visible='legendonly', legendgroup='CR'),
+                go.Scatter(x=[start_date, end_date], y=[cr, cr], name=name,
+                           line=dict(color=color, width=1, dash='dash'), visible='legendonly', legendgroup='CR'),
                 secondary_y=True,
             )
 
         # Add additional collateral trace
         collateral_dates, collateral_values = zip(*additional_collateral_data)
         fig.add_trace(
-            go.Scatter(x=collateral_dates, y=collateral_values, name="Additional Collateral", line=dict(color='red', width=1, dash='dash'), visible='legendonly'),
+            go.Scatter(x=collateral_dates, y=collateral_values, name="Additional Collateral",
+                       line=dict(color='red', width=1, dash='dash'), visible='legendonly'),
             secondary_y=False,
         )
 
@@ -320,61 +331,50 @@ def interactive_plot(results_over_time, assets, vault_collaterals, end_date):
         fig.write_html(f'interactive_plot_{clean_asset_name}.html')
 
 
-def output_summary(results_over_time, assets, vault_collaterals, output_file='summary.csv'):
-    """Output a summary of the backtest results to a CSV file."""
-    summary_data = []
+def save_results(results, filename='backtest_results.json'):
+    def convert_timestamps(obj):
+        if isinstance(obj, pd.Timestamp):
+            return obj.isoformat()
+        return str(obj)
 
-    for date, results in results_over_time.items():
-        for asset in assets:
-            clean_asset_name = asset.replace("-USD", "")
-            eth_key = f"{vault_collaterals[0]}/{asset}"
-            usdc_key = f"{vault_collaterals[1]}/{asset}"
+    # Convert Timestamp keys to strings
+    converted_results = {k.isoformat() if isinstance(k, pd.Timestamp) else k: v for k, v in results.items()}
 
-            if eth_key in results and usdc_key in results:
-                eth_result = results[eth_key]
-                usdc_result = results[usdc_key]
-
-                if eth_result is not None and usdc_result is not None:
-                    eth_additional = eth_result['total_additional_vault_collateral']
-                    usdc_additional = usdc_result['total_additional_vault_collateral']
-                    eth_final_cr = eth_result['vault_cr_series'][-1]
-                    usdc_final_cr = usdc_result['vault_cr_series'][-1]
-
-                    # Determine better strategy
-                    if eth_additional == 0 and usdc_additional == 0:
-                        better_strategy = 'ETH' if eth_final_cr > usdc_final_cr else 'USDC'
-                    else:
-                        better_strategy = 'ETH' if eth_additional < usdc_additional else 'USDC'
-
-                    summary_data.append({
-                        'Date': date,
-                        'Asset': clean_asset_name,
-                        'Better Strategy': better_strategy,
-                        'ETH Final CR': eth_final_cr,
-                        'USDC Final CR': usdc_final_cr,
-                        'ETH Additional Collateral': eth_additional,
-                        'USDC Additional Collateral': usdc_additional
-                    })
-
-    df = pd.DataFrame(summary_data)
-    df.to_csv(output_file, index=False)
-    print(f"Summary saved to {output_file}")
+    with open(filename, 'w') as f:
+        json.dump(converted_results, f, default=convert_timestamps)
+    print(f"Results saved to {filename}")
 
 
-# Define parameters for the extended backtest
-vault_collaterals = ['ETH-USD', 'USDC-USD']
-assets = ['XRP-USD', 'BTC-USD', 'DOGE-USD']
-end_date = datetime.now().replace(tzinfo=None)
-start_date = end_date - timedelta(days=3 * 365)  # 3 years ago, but will be adjusted based on FLR data availability
+def load_results(filename='backtest_results.json'):
+    with open(filename, 'r') as f:
+        data = json.load(f)
 
-# Run the extended historical backtest
-results_over_time = compare_strategies_over_time(vault_collaterals, assets, start_date, end_date)
+    # Convert string keys back to Timestamps
+    return {pd.Timestamp(k) if k.startswith('20') else k: v for k, v in data.items()}
 
-# Generate both PNG and interactive HTML plots
-extended_plot(results_over_time, assets, vault_collaterals, end_date)
-interactive_plot(results_over_time, assets, vault_collaterals, end_date)
 
-# Output a summary to a CSV file
-output_summary(results_over_time, assets, vault_collaterals)
+# Main execution
+if __name__ == "__main__":
+    # Define parameters for the extended backtest
+    vault_collaterals = ['ETH-USD', 'USDC-USD']
+    assets = ['XRP-USD', 'BTC-USD', 'DOGE-USD']
+    end_date = datetime.now().replace(tzinfo=None)
+    start_date = end_date - timedelta(days=3 * 365)  # 3 years ago, but will be adjusted based on FLR data availability
 
-print("Analysis complete. Check the generated PNG files, HTML files, and summary.csv for results.")
+    # Toggle for calculation
+    run_calculation = True  # Set as False to skip calculation and use saved results
+
+    if run_calculation:
+        # Run the extended historical backtest
+        results_over_time = compare_strategies_over_time(vault_collaterals, assets, start_date, end_date)
+        # Save the results as JSON
+        save_results(results_over_time)
+    else:
+        # Load the results from JSON
+        results_over_time = load_results()
+
+    # Generate both PNG and interactive HTML plots
+    extended_plot(results_over_time, assets, vault_collaterals, end_date)
+    interactive_plot(results_over_time, assets, vault_collaterals, end_date)
+
+    print("Analysis complete. Check the generated PNG files and HTML files for results.")
