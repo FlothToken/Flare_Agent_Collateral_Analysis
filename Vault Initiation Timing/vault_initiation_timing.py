@@ -313,16 +313,32 @@ def interactive_plot(results_over_time, assets, vault_collaterals, end_date):
             secondary_y=False,
         )
 
+        # Add text annotations for additional collateral
+        annotations = []
+        for date, value in zip(collateral_dates, collateral_values):
+            if value > 0:
+                annotations.append(dict(
+                    x=date,
+                    y=full_asset_data.loc[date],
+                    text=f"${value:,.0f}",
+                    showarrow=False,
+                    textangle=-90,  # Vertical text
+                    yshift=10,
+                    font=dict(size=8, color="red"),
+                    visible=True
+                ))
+
         # Update layout
         fig.update_layout(
             title=f"{clean_asset_name} Price, Best Strategy CR, and Additional Collateral",
             xaxis_title="Date",
             legend_title="Legend",
-            hovermode="closest"
+            hovermode="closest",
+            annotations=annotations
         )
 
         # Set y-axes titles
-        fig.update_yaxes(title_text="Price / Additional Collateral", secondary_y=False)
+        fig.update_yaxes(title_text="Price", secondary_y=False)
         fig.update_yaxes(title_text="Collateral Ratio (CR)", secondary_y=True)
 
         # Save the plot as an HTML file
