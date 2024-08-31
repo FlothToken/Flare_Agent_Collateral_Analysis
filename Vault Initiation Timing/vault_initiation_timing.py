@@ -238,10 +238,10 @@ def interactive_plot(results_over_time, assets, vault_collaterals, end_date):
         # Create figure with secondary y-axis
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        # Add full asset price data
+        # Add full asset price data (always visible, no toggle)
         fig.add_trace(
             go.Scatter(x=full_asset_data.index, y=full_asset_data.values, name=f"{clean_asset_name} Price",
-                       line=dict(color='black', width=1)),
+                       line=dict(color='black', width=1), hoverinfo='skip', showlegend=False),
             secondary_y=False,
         )
 
@@ -265,20 +265,18 @@ def interactive_plot(results_over_time, assets, vault_collaterals, end_date):
                         usdc_additional = usdc_result['total_additional_vault_collateral']
 
                         if eth_additional == 0 and usdc_additional == 0:
-                            color = 'green' if eth_result['vault_cr_series'][-1] > usdc_result['vault_cr_series'][
-                                -1] else 'blue'
+                            color = 'green' if eth_result['vault_cr_series'][-1] > usdc_result['vault_cr_series'][-1] else 'blue'
                         else:
                             color = 'green' if eth_additional < usdc_additional else 'blue'
 
                         best_strategy = 'ETH' if color == 'green' else 'USDC'
-                        best_cr = eth_result['vault_cr_series'][-1] if best_strategy == 'ETH' else \
-                        usdc_result['vault_cr_series'][-1]
+                        best_cr = eth_result['vault_cr_series'][-1] if best_strategy == 'ETH' else usdc_result['vault_cr_series'][-1]
                         best_additional_collateral = min(eth_additional, usdc_additional)
 
-                        # Add segment to plot (part of default view)
+                        # Add segment to plot (always visible, no toggle)
                         fig.add_trace(
                             go.Scatter(x=segment_data.index, y=segment_data.values, name=f"Segment {date}",
-                                       line=dict(color=color, width=2), showlegend=False),
+                                       line=dict(color=color, width=2), showlegend=False, hoverinfo='skip'),
                             secondary_y=False,
                         )
 
@@ -320,7 +318,7 @@ def interactive_plot(results_over_time, assets, vault_collaterals, end_date):
             title=f"{clean_asset_name} Price, Best Strategy CR, and Additional Collateral",
             xaxis_title="Date",
             legend_title="Legend",
-            hovermode="x unified"
+            hovermode="closest"
         )
 
         # Set y-axes titles
@@ -362,7 +360,7 @@ if __name__ == "__main__":
     start_date = end_date - timedelta(days=3 * 365)  # 3 years ago, but will be adjusted based on FLR data availability
 
     # Toggle for calculation
-    run_calculation = True  # Set as False to skip calculation and use saved results
+    run_calculation = False  # Set as False to skip calculation and use saved results
 
     if run_calculation:
         # Run the extended historical backtest
