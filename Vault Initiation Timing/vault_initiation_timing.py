@@ -1,27 +1,20 @@
 import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from main import fetch_historical_data, calculate_collateral_ratio, MINIMAL_CR, SAFETY_CR, TOP_UP_CR
 from matplotlib.lines import Line2D
 
-# Fixed FLR price for pool collateral
-FIXED_FLR_PRICE = 0.05
-
-
-def backtest_strategy(vault_collateral, asset, start_date, end_date, fixed_flr_price=FIXED_FLR_PRICE, initial_cr=1.5,
+def backtest_strategy(vault_collateral, asset, start_date, end_date, initial_cr=1.5,
                       initial_vault_collateral=100000, initial_pool_collateral=100000):
-    """Backtest the strategy for given collaterals and asset using fixed FLR price."""
-    # Fetch historical data for vault collateral and asset
+    """Backtest the strategy for given collaterals and asset using actual FLR price."""
+    # Fetch historical data for vault collateral, asset, and FLR
     vault_collateral_data = fetch_historical_data(vault_collateral, start_date, end_date)
     asset_data = fetch_historical_data(asset, start_date, end_date)
-
-    # Use the fixed FLR price for pool collateral
-    pool_collateral_data = pd.Series(fixed_flr_price, index=vault_collateral_data.index)
+    pool_collateral_data = fetch_historical_data('FLR-USD', start_date, end_date)
 
     # Align data to common dates
-    common_dates = vault_collateral_data.index.intersection(asset_data.index)
+    common_dates = vault_collateral_data.index.intersection(asset_data.index).intersection(pool_collateral_data.index)
     vault_collateral_data = vault_collateral_data[common_dates]
     pool_collateral_data = pool_collateral_data[common_dates]
     asset_data = asset_data[common_dates]
@@ -29,7 +22,7 @@ def backtest_strategy(vault_collateral, asset, start_date, end_date, fixed_flr_p
     # Initialize variables
     initial_asset_value = initial_vault_collateral / initial_cr
     initial_vault_units = initial_vault_collateral / vault_collateral_data.iloc[0]
-    initial_pool_units = initial_pool_collateral / fixed_flr_price
+    initial_pool_units = initial_pool_collateral / pool_collateral_data.iloc[0]
 
     vault_cr_series, pool_cr_series = [], []
     dates = []
@@ -41,8 +34,8 @@ def backtest_strategy(vault_collateral, asset, start_date, end_date, fixed_flr_p
     current_fassets = initial_asset_value
 
     # Simulate strategy over time
-    for date, vault_price, asset_price in zip(common_dates, vault_collateral_data, asset_data):
-        pool_price = fixed_flr_price
+    for date, vault_price, asset_price, pool_price in zip(common_dates, vault_collateral_data, asset_data,
+                                                          pool_collateral_data):
         vault_collateral_value = current_vault_units * vault_price
         pool_collateral_value = current_pool_units * pool_price
         asset_value = current_fassets * asset_price / asset_data.iloc[0]
@@ -99,7 +92,15 @@ def backtest_strategy(vault_collateral, asset, start_date, end_date, fixed_flr_p
 def compare_strategies_over_time(vault_collaterals, assets, start_date, end_date, comparison_window=90):
     """Compare strategies for each week over the given time period."""
     results_over_time = {}
-    date_ranges = pd.date_range(start=start_date, end=end_date - timedelta(days=comparison_window), freq='W-MON')
+
+    # Fetch FLR data to determine the actual start date
+    flr_data = fetch_historical_data('FLR-USD', start_date, end_date)
+    actual_start_date = flr_data.index[0].tz_localize(None)  # Make timezone-naive
+
+    # Ensure end_date is timezone-naive
+    end_date = end_date.replace(tzinfo=None)
+
+    date_ranges = pd.date_range(start=actual_start_date, end=end_date - timedelta(days=comparison_window), freq='W-MON')
 
     for current_date in date_ranges:
         print(f"Processing date: {current_date.date()}")
@@ -117,7 +118,11 @@ def compare_strategies_over_time(vault_collaterals, assets, start_date, end_date
 def extended_plot(results_over_time, assets, vault_collaterals, end_date):
     """Create the final plot showing which strategy would have been better."""
     for asset in assets:
-        fig, ax = plt.subplots(figsize=(15, 8))
+        fig, ax1 = plt.subplots(figsize=(15, 8))
+        ax2 = ax1.twinx()  # Create a secondary y-axis
+
+        # Remove "-USD" suffix from asset name
+        clean_asset_name = asset.replace("-USD", "")
 
         # Fetch full asset data for the entire period
         start_date = min(results_over_time.keys())
@@ -125,7 +130,9 @@ def extended_plot(results_over_time, assets, vault_collaterals, end_date):
         full_asset_data.index = full_asset_data.index.tz_localize(None)  # Making sure it's timezone naive
 
         # Plot the full asset price data in black
-        ax.plot(full_asset_data.index, full_asset_data.values, color='black', linewidth=1, alpha=0.3)
+        ax1.plot(full_asset_data.index, full_asset_data.values, color='black', linewidth=1, alpha=0.3)
+
+        additional_collateral_data = []
 
         for date, results in results_over_time.items():
             eth_key = f"{vault_collaterals[0]}/{asset}"
@@ -140,28 +147,39 @@ def extended_plot(results_over_time, assets, vault_collaterals, end_date):
                     segment_data = full_asset_data.loc[date:end_date_segment]
 
                     if date <= end_date - timedelta(days=90):
-                        color = 'green' if eth_result['total_additional_vault_collateral'] < usdc_result['total_additional_vault_collateral'] else 'blue'
+                        eth_additional = eth_result['total_additional_vault_collateral']
+                        usdc_additional = usdc_result['total_additional_vault_collateral']
+                        color = 'green' if eth_additional < usdc_additional else 'blue'
+                        additional_collateral = min(eth_additional, usdc_additional)
                     else:
                         color = 'black'
+                        additional_collateral = 0
 
-                    ax.plot(segment_data.index, segment_data.values, color=color, linewidth=2)
+                    ax1.plot(segment_data.index, segment_data.values, color=color, linewidth=2)
+                    additional_collateral_data.append((date, additional_collateral))
 
-        ax.set_title(f"Price and Better Initialization Strategy for {asset}")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Price")
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-        ax.xaxis.set_major_locator(mdates.MonthLocator())
-        ax.grid(True)
+        # Plot additional collateral requirements
+        dates, collateral_values = zip(*additional_collateral_data)
+        ax2.plot(dates, collateral_values, color='red', linestyle='--', alpha=0.5)
+
+        ax1.set_title(f"{clean_asset_name} Price and Better Vault Initialization Strategy")
+        ax1.set_xlabel("Date")
+        ax1.set_ylabel("Price")
+        ax2.set_ylabel("Additional Collateral Required")
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax1.xaxis.set_major_locator(mdates.MonthLocator())
+        ax1.grid(True)
 
         # Create a custom legend
         custom_lines = [Line2D([0], [0], color='green', lw=2),
                         Line2D([0], [0], color='blue', lw=2),
-                        Line2D([0], [0], color='black', lw=2)]
-        ax.legend(custom_lines, ['ETH better', 'USDC better', 'Last 3 months / Full price'])
+                        Line2D([0], [0], color='black', lw=2),
+                        Line2D([0], [0], color='red', linestyle='--', alpha=0.5)]
+        ax1.legend(custom_lines, ['ETH better', 'USDC better', 'Last 3 months / Full price', 'Additional Collateral'])
 
         plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
-        plt.savefig(f'price_strategy_{asset}.png')
+        plt.savefig(f'price_strategy_{clean_asset_name}.png')
         plt.close()
 
 
@@ -171,6 +189,7 @@ def output_summary(results_over_time, assets, vault_collaterals, output_file='su
 
     for date, results in results_over_time.items():
         for asset in assets:
+            clean_asset_name = asset.replace("-USD", "")
             eth_key = f"{vault_collaterals[0]}/{asset}"
             usdc_key = f"{vault_collaterals[1]}/{asset}"
 
@@ -183,7 +202,7 @@ def output_summary(results_over_time, assets, vault_collaterals, output_file='su
                         'total_additional_vault_collateral'] else 'USDC'
                     summary_data.append({
                         'Date': date,
-                        'Asset': asset,
+                        'Asset': clean_asset_name,
                         'Better Strategy': better_strategy,
                         'ETH Final Price': eth_result['vault_cr_series'][-1],
                         'USDC Final Price': usdc_result['vault_cr_series'][-1],
@@ -200,7 +219,7 @@ def output_summary(results_over_time, assets, vault_collaterals, output_file='su
 vault_collaterals = ['ETH-USD', 'USDC-USD']
 assets = ['XRP-USD', 'BTC-USD', 'DOGE-USD']
 end_date = datetime.now().replace(tzinfo=None)
-start_date = end_date - timedelta(days=3 * 365)  # 3 years ago
+start_date = end_date - timedelta(days=3 * 365)  # 3 years ago, but will be adjusted based on FLR data availability
 
 # Run the extended historical backtest
 results_over_time = compare_strategies_over_time(vault_collaterals, assets, start_date, end_date)
