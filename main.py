@@ -24,7 +24,8 @@ def calculate_collateral_ratio(collateral_value, asset_value):
     return collateral_value / asset_value if asset_value != 0 else float('inf')
 
 def backtest_strategy(vault_collateral, pool_collateral, asset, start_date, end_date, initial_cr=1.5,
-                      initial_vault_collateral=100000, initial_pool_collateral=100000):
+                      initial_vault_collateral=100000, initial_pool_collateral=100000,
+                      agent_pool_stake_ratio=0.2):
     """Backtest the strategy for given collaterals and asset."""
     # Fetch historical data
     vault_collateral_data = fetch_historical_data(vault_collateral, start_date, end_date)
@@ -43,6 +44,7 @@ def backtest_strategy(vault_collateral, pool_collateral, asset, start_date, end_
     initial_pool_units = initial_pool_collateral / pool_collateral_data.iloc[0]
 
     vault_cr_series, pool_cr_series = [], []
+    lowest_vault_cr_series, lowest_pool_cr_series = [], []
     dates = []
     liquidation_events = []
     full_liquidations = 0
@@ -56,8 +58,7 @@ def backtest_strategy(vault_collateral, pool_collateral, asset, start_date, end_
 
     # Simulate strategy over time
     for date, vault_price, pool_price, asset_price in zip(common_dates, vault_collateral_data,
-                                                          pool_collateral_data,
-                                                          asset_data):
+                                                          pool_collateral_data, asset_data):
         vault_collateral_value = current_vault_units * vault_price
         pool_collateral_value = current_pool_units * pool_price
         asset_value = current_fassets * asset_price / asset_data.iloc[0]
@@ -66,8 +67,9 @@ def backtest_strategy(vault_collateral, pool_collateral, asset, start_date, end_
         vault_cr = calculate_collateral_ratio(vault_collateral_value, asset_value)
         pool_cr = calculate_collateral_ratio(pool_collateral_value, asset_value)
 
-        vault_cr_series.append(vault_cr)
-        pool_cr_series.append(pool_cr)
+        # Store the lowest CR before adding collateral
+        lowest_vault_cr = vault_cr
+        lowest_pool_cr = pool_cr
 
         if vault_cr >= SAFETY_CR and pool_cr >= SAFETY_CR:
             healthy_days += 1
@@ -81,25 +83,32 @@ def backtest_strategy(vault_collateral, pool_collateral, asset, start_date, end_
             # Add vault collateral to reach SAFETY_CR
             additional_vault_collateral_needed = max(0, (SAFETY_CR * asset_value - vault_collateral_value))
             current_vault_units += additional_vault_collateral_needed / vault_price
+            vault_collateral_value = current_vault_units * vault_price  # Update value after adding collateral
+            vault_cr = calculate_collateral_ratio(vault_collateral_value, asset_value)  # Recalculate CR
             below_minimum_events += 1
-        elif pool_cr < MINIMAL_CR:
-            # Add pool collateral to reach SAFETY_CR
-            additional_pool_collateral_needed = max(0, (SAFETY_CR * asset_value - pool_collateral_value))
-            current_pool_units += additional_pool_collateral_needed / pool_price
+
+        if pool_cr < MINIMAL_CR:
+            # Calculate total pool collateral needed to reach SAFETY_CR
+            total_pool_collateral_needed = max(0, (SAFETY_CR * asset_value - pool_collateral_value))
+            # Add full amount to pool, but agent is only responsible for their portion
+            current_pool_units += total_pool_collateral_needed / pool_price
+            pool_collateral_value = current_pool_units * pool_price  # Update value after adding collateral
+            pool_cr = calculate_collateral_ratio(pool_collateral_value, asset_value)  # Recalculate CR
+            additional_pool_collateral_needed = agent_pool_stake_ratio * total_pool_collateral_needed
             below_minimum_events += 1
-        elif pool_cr < TOP_UP_CR:
-            # Top-up pool collateral
-            additional_pool_collateral_needed = max(0, (SAFETY_CR * asset_value - pool_collateral_value))
-            current_pool_units += additional_pool_collateral_needed / pool_price
 
         if additional_vault_collateral_needed > 0 or additional_pool_collateral_needed > 0:
             liquidation_events.append(
-                (date, additional_vault_collateral_needed, additional_pool_collateral_needed, vault_cr, pool_cr))
+                (date, additional_vault_collateral_needed, additional_pool_collateral_needed, lowest_vault_cr, lowest_pool_cr))
 
-        # Update total additional collateral
+        # Update total additional collateral (only track agent's responsibility for pool)
         total_additional_vault_collateral += additional_vault_collateral_needed
         total_additional_pool_collateral += additional_pool_collateral_needed
 
+        vault_cr_series.append(vault_cr)
+        pool_cr_series.append(pool_cr)
+        lowest_vault_cr_series.append(lowest_vault_cr)
+        lowest_pool_cr_series.append(lowest_pool_cr)
         dates.append(date)
 
     return {
@@ -120,6 +129,8 @@ def backtest_strategy(vault_collateral, pool_collateral, asset, start_date, end_
         'max_pool_cr': max(pool_cr_series),
         'vault_cr_series': vault_cr_series,
         'pool_cr_series': pool_cr_series,
+        'lowest_vault_cr_series': lowest_vault_cr_series,
+        'lowest_pool_cr_series': lowest_pool_cr_series,
         'dates': dates,
         'total_additional_vault_collateral': total_additional_vault_collateral,
         'total_additional_pool_collateral': total_additional_pool_collateral

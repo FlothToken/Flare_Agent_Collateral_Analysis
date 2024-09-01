@@ -8,9 +8,15 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
 
+# Agent's percentage responsibility of pool collateral
+agent_pool_stake_ratio = 0.2
+
+# Adjust to change the forecasting period
+comparison_window = 90
 
 def backtest_strategy(vault_collateral, asset, start_date, end_date, initial_cr=1.5,
-                      initial_vault_collateral=100000, initial_pool_collateral=100000):
+                      initial_vault_collateral=100000, initial_pool_collateral=100000,
+                      agent_pool_stake_ratio=0.2):
     """Backtest the strategy for given collaterals and asset using actual FLR price."""
     # Fetch historical data for vault collateral, asset, and FLR
     vault_collateral_data = fetch_historical_data(vault_collateral, start_date, end_date)
@@ -61,30 +67,32 @@ def backtest_strategy(vault_collateral, asset, start_date, end_date, initial_cr=
         # Initialize variables for this iteration
         additional_vault_collateral_needed = 0
         additional_pool_collateral_needed = 0
+        additional_pool_collateral_agent = 0
 
         # Check if we need to add collateral to avoid liquidation
-        if vault_cr < CCB_CR or pool_cr < CCB_CR:
-            # Immediate liquidation
-            additional_vault_collateral_needed = max(0, (SAFETY_CR * asset_value - vault_collateral_value))
-            additional_pool_collateral_needed = max(0, (SAFETY_CR * asset_value - pool_collateral_value))
+        if vault_cr < MINIMAL_CR:  # Check if Vault CR falls below 1.4
+            additional_vault_collateral_needed = (SAFETY_CR * asset_value) - vault_collateral_value
             current_vault_units += additional_vault_collateral_needed / vault_price
-            current_pool_units += additional_pool_collateral_needed / pool_price
-        elif vault_cr < MINIMAL_CR:
-            # Add vault collateral to reach SAFETY_CR
-            additional_vault_collateral_needed = max(0, (SAFETY_CR * asset_value - vault_collateral_value))
-            current_vault_units += additional_vault_collateral_needed / vault_price
-        elif pool_cr < MINIMAL_CR:
-            # Add pool collateral to reach SAFETY_CR
-            additional_pool_collateral_needed = max(0, (SAFETY_CR * asset_value - pool_collateral_value))
-            current_pool_units += additional_pool_collateral_needed / pool_price
-        elif pool_cr < TOP_UP_CR:
-            # Top-up pool collateral
-            additional_pool_collateral_needed = max(0, (SAFETY_CR * asset_value - pool_collateral_value))
-            current_pool_units += additional_pool_collateral_needed / pool_price
+            vault_collateral_value = current_vault_units * vault_price
+            vault_cr = calculate_collateral_ratio(vault_collateral_value, asset_value)
 
-        # Recalculate CR after adding collateral
-        vault_cr = calculate_collateral_ratio(current_vault_units * vault_price, asset_value)
-        pool_cr = calculate_collateral_ratio(current_pool_units * pool_price, asset_value)
+        if pool_cr < MINIMAL_CR:  # Check if Pool CR falls below 1.4
+            additional_pool_collateral_needed = (SAFETY_CR * asset_value) - pool_collateral_value
+            additional_pool_collateral_agent = agent_pool_stake_ratio * additional_pool_collateral_needed
+            current_pool_units += additional_pool_collateral_needed / pool_price
+            pool_collateral_value = current_pool_units * pool_price
+            pool_cr = calculate_collateral_ratio(pool_collateral_value, asset_value)
+
+        # Debugging prints to ensure correct calculation
+        print(f"Date: {date}")
+        print(f"Vault CR before: {lowest_vault_cr:.4f}, after: {vault_cr:.4f}")
+        print(f"Pool CR before: {lowest_pool_cr:.4f}, after: {pool_cr:.4f}")
+        print(f"Additional vault collateral needed: {additional_vault_collateral_needed:.2f}")
+        print(f"Additional pool collateral needed (total): {additional_pool_collateral_needed:.2f}")
+        print(f"Additional pool collateral needed (agent): {additional_pool_collateral_agent:.2f}")
+        if additional_vault_collateral_needed > 0 or additional_pool_collateral_needed > 0:
+            print(f"Final Vault CR after adding collateral: {vault_cr:.4f}")
+            print(f"Final Pool CR after adding collateral: {pool_cr:.4f}")
 
         vault_cr_series.append(vault_cr)
         pool_cr_series.append(pool_cr)
@@ -93,12 +101,12 @@ def backtest_strategy(vault_collateral, asset, start_date, end_date, initial_cr=
 
         if additional_vault_collateral_needed > 0 or additional_pool_collateral_needed > 0:
             liquidation_events.append(
-                (date, additional_vault_collateral_needed, additional_pool_collateral_needed, lowest_vault_cr,
+                (date, additional_vault_collateral_needed, additional_pool_collateral_agent, lowest_vault_cr,
                  lowest_pool_cr))
 
-        # Update total additional collateral
+        # Update total additional collateral (only track agent's responsibility for pool)
         total_additional_vault_collateral += additional_vault_collateral_needed
-        total_additional_pool_collateral += additional_pool_collateral_needed
+        total_additional_pool_collateral += additional_pool_collateral_agent
 
         dates.append(date)
 
@@ -117,8 +125,7 @@ def backtest_strategy(vault_collateral, asset, start_date, end_date, initial_cr=
         'total_additional_pool_collateral': total_additional_pool_collateral
     }
 
-
-def compare_strategies_over_time(vault_collaterals, assets, start_date, end_date, comparison_window=90):
+def compare_strategies_over_time(vault_collaterals, assets, start_date, end_date, comparison_window=90, agent_pool_stake_ratio=0.2):
     """Compare strategies for each week over the given time period."""
     results_over_time = {}
 
@@ -142,7 +149,8 @@ def compare_strategies_over_time(vault_collaterals, assets, start_date, end_date
             for asset in assets:
                 key = f"{vault_collateral}/{asset}"
                 result = backtest_strategy(vault_collateral, asset, current_date,
-                                           current_date + timedelta(days=comparison_window))
+                                           current_date + timedelta(days=comparison_window),
+                                           agent_pool_stake_ratio=agent_pool_stake_ratio)
                 if result is not None:
                     results[key] = result
         if results:  # Only add to results_over_time if there are valid results
@@ -376,7 +384,7 @@ if __name__ == "__main__":
     start_date = end_date - timedelta(days=3 * 365)  # 3 years ago, but will be adjusted based on FLR data availability
 
     # Toggle for calculation
-    run_calculation = False  # Set as False to skip calculation and use saved results
+    run_calculation = True  # Set as False to skip calculation and use saved results
 
     if run_calculation:
         # Run the extended historical backtest
